@@ -34,8 +34,8 @@ jobs:
 
       - name: Download files
         run: |
-          curl -L -O https://github.com/vpnhood/VpnHood.App.Connect/releases/latest/download/VpnHoodConnect-android-web.apk
-          curl -L -O https://github.com/vpnhood/VpnHood.App.Connect/releases/latest/download/VpnHoodConnect-win-x64.msi
+          curl -fL -O https://github.com/vpnhood/VpnHood.App.Connect/releases/latest/download/VpnHoodConnect-android-web.apk
+          curl -fL -O https://github.com/vpnhood/VpnHood.App.Connect/releases/latest/download/VpnHoodConnect-win-x64.exe
 
       - name: Setup Pages
         uses: actions/configure-pages@v6
