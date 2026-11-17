@@ -1,29 +1,58 @@
-# Simple workflow for deploying static content to GitHub Pages
+# The mirror of CONNECT's latest release: its Windows installer and Android APK under fixed names, on GitHub Pages.
+# Every six hours a schedule compares CONNECT's latest release with the one in publish_version.txt, deploys a new one
+# and then records its tag there. That commit is also the activity that keeps GitHub from turning the schedule off
+# after 60 days without any. A push or a manual run deploys the latest release whatever the file says.
 name: Deploy static content to Pages
 
 on:
-  # Runs on pushes targeting the default branch
   push:
     branches: ["main"]
-
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
+  schedule:
+    - cron: "17 */6 * * *"
 
-# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
-# Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
-# However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
+# one deployment at a time; a queued run waits for the one in progress, which is never cancelled
 concurrency:
   group: "pages"
   cancel-in-progress: false
 
 jobs:
-  # Single deploy job since we're just deploying
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      deploy: ${{ steps.release.outputs.deploy }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: CONNECT's latest release against the deployed one
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          tag=$(gh api repos/vpnhood/VpnHood.App.Connect/releases/latest --jq .tag_name)
+          [ -n "$tag" ] || { echo "CONNECT has no latest release."; exit 1; }
+          deployed=$(tr -d '[:space:]' < publish_version.txt)
+          echo "latest $tag, deployed $deployed"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if [ "$EVENT" != "schedule" ] || [ "$tag" != "$deployed" ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          fi
+
   deploy:
+    needs: check
+    if: needs.check.outputs.deploy == 'true'
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -32,18 +61,48 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # by the tag the check saw, so the files and the recorded version are one release; a release whose files are
+      # still uploading fails here, and the next run tries again
       - name: Download files
+        env:
+          TAG: ${{ needs.check.outputs.tag }}
         run: |
-          curl -fL -O https://github.com/vpnhood/VpnHood.App.Connect/releases/latest/download/VpnHoodConnect-android-web.apk
-          curl -fL -O https://github.com/vpnhood/VpnHood.App.Connect/releases/latest/download/VpnHoodConnect-win-x64.exe
+          base="https://github.com/vpnhood/VpnHood.App.Connect/releases/download/$TAG"
+          curl -fL -O "$base/VpnHoodConnect-android-web.apk"
+          curl -fL -O "$base/VpnHoodConnect-win-x64.exe"
+          echo "$TAG" > publish_version.txt
 
       - name: Setup Pages
         uses: actions/configure-pages@v6
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v5
         with:
-          # Upload entire repository
           path: '.'
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5
+
+  # only after a deployment: a failed one leaves the old tag, so the next scheduled run deploys again
+  record:
+    needs: [check, deploy]
+    if: needs.deploy.result == 'success'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Record the deployed release
+        env:
+          TAG: ${{ needs.check.outputs.tag }}
+        run: |
+          if [ "$(tr -d '[:space:]' < publish_version.txt)" = "$TAG" ]; then
+            echo "$TAG is recorded already."
+            exit 0
+          fi
+          echo "$TAG" > publish_version.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -q -m "The mirror serves CONNECT $TAG" -- publish_version.txt
+          git push -q
